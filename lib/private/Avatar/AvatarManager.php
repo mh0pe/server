@@ -13,6 +13,7 @@ use OC\KnownUser\KnownUserService;
 use OC\User\Manager;
 use OCP\Accounts\IAccountManager;
 use OCP\Accounts\PropertyDoesNotExistException;
+use OCP\Federation\ICloudIdManager;
 use OCP\Files\IAppData;
 use OCP\Files\NotFoundException;
 use OCP\Files\NotPermittedException;
@@ -55,6 +56,11 @@ class AvatarManager implements IAvatarManager {
 	public function getAvatar(string $userId): IAvatar {
 		$user = $this->userManager->get($userId);
 		if ($user === null) {
+			$cloudIdManager = \OCP\Server::get(ICloudIdManager::class);
+			if ($cloudIdManager->isValidCloudId($userId)) {
+				return $this->getRemoteAvatar($userId);
+			}
+
 			throw new \Exception('user does not exist');
 		}
 
@@ -133,5 +139,15 @@ class AvatarManager implements IAvatarManager {
 	#[\Override]
 	public function getGuestAvatar(string $name): IAvatar {
 		return new GuestAvatar($name, $this->config, $this->logger);
+	}
+
+	/**
+	 * Returns a RemoteAvatar
+	 *
+	 * @param string $userId The \OCP\Federation\ICloudId of the remote account, e.g. account@example.com
+	 */
+	private function getRemoteAvatar(string $userId): IAvatar {
+		$folder = $this->appData->newFolder($userId);
+		return new RemoteAvatar($folder, $userId, $this->config, $this->logger);
 	}
 }
