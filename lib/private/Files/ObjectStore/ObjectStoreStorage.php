@@ -17,6 +17,7 @@ use OC\Files\Cache\Cache;
 use OC\Files\Cache\CacheEntry;
 use OC\Files\Storage\Common;
 use OC\Files\Storage\PolyFill\CopyDirectory;
+use OC\Files\Storage\Wrapper\Encryption;
 use OCP\Constants;
 use OCP\DB\QueryBuilder\IQueryBuilder;
 use OCP\Files\Cache\ICache;
@@ -601,6 +602,13 @@ class ObjectStoreStorage extends Common implements IChunkedFileWrite {
 		string $targetInternalPath,
 		bool $preserveMtime = false,
 	): bool {
+		// An encrypted source has to be read through its encryption wrapper. The shortcut
+		// below copies the object verbatim, which would leave the ciphertext in a storage
+		// that has no encryption wrapper to decrypt it again (cf. Common::moveFromStorage).
+		if ($sourceStorage->instanceOfStorage(Encryption::class)) {
+			return parent::copyFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+		}
+
 		if ($sourceStorage->instanceOfStorage(ObjectStoreStorage::class)) {
 			/** @var ObjectStoreStorage $sourceStorage */
 			if ($sourceStorage->getObjectStore()->getStorageId() === $this->getObjectStore()->getStorageId()) {
@@ -623,6 +631,15 @@ class ObjectStoreStorage extends Common implements IChunkedFileWrite {
 
 	#[\Override]
 	public function moveFromStorage(IStorage $sourceStorage, string $sourceInternalPath, string $targetInternalPath, ?ICacheEntry $sourceCacheEntry = null): bool {
+		// An encrypted source has to be read through its encryption wrapper, so fall back to
+		// the generic copy and delete in Common. Neither shortcut below can be used: the
+		// metadata only move leaves the ciphertext untouched while the cache entry loses its
+		// `encrypted` mark, and copyObjects() reuses the source file id for the target
+		// object, which resolves to the same object when both storages share an object store.
+		if ($sourceStorage->instanceOfStorage(Encryption::class)) {
+			return parent::moveFromStorage($sourceStorage, $sourceInternalPath, $targetInternalPath);
+		}
+
 		$sourceCache = $sourceStorage->getCache();
 		if (
 			$sourceStorage->instanceOfStorage(ObjectStoreStorage::class)
