@@ -10,6 +10,7 @@ namespace Test\Avatar;
 
 use OC\Avatar\AvatarManager;
 use OC\Avatar\PlaceholderAvatar;
+use OC\Avatar\RemoteAvatar;
 use OC\Avatar\UserAvatar;
 use OC\KnownUser\KnownUserService;
 use OC\User\Manager;
@@ -17,6 +18,8 @@ use OC\User\User;
 use OCP\Accounts\IAccount;
 use OCP\Accounts\IAccountManager;
 use OCP\Accounts\IAccountProperty;
+use OCP\Federation\ICloudId;
+use OCP\Federation\ICloudIdManager;
 use OCP\Files\IAppData;
 use OCP\Files\SimpleFS\ISimpleFolder;
 use OCP\IConfig;
@@ -71,19 +74,6 @@ class AvatarManagerTest extends \Test\TestCase {
 			$this->accountManager,
 			$this->knownUserService
 		);
-	}
-
-	public function testGetAvatarInvalidUser(): void {
-		$this->expectException(\Exception::class);
-		$this->expectExceptionMessage('user does not exist');
-
-		$this->userManager
-			->expects($this->once())
-			->method('get')
-			->with('invalidUser')
-			->willReturn(null);
-
-		$this->avatarManager->getAvatar('invalidUser');
 	}
 
 	public function testGetAvatarForSelf(): void {
@@ -275,5 +265,74 @@ class AvatarManagerTest extends \Test\TestCase {
 			$expected = new UserAvatar($folder, $this->l10n, $user, $this->logger, $this->config);
 		}
 		$this->assertEquals($expected, $this->avatarManager->getAvatar('valid-user'));
+	}
+
+	public function testGetAvatarInvalidUser(): void {
+		$this->expectException(\Exception::class);
+		$this->expectExceptionMessage('user does not exist');
+
+		$this->userManager
+			->expects($this->once())
+			->method('get')
+			->with('invalidUser')
+			->willReturn(null);
+
+		$this->avatarManager->getAvatar('invalidUser');
+	}
+
+	public function testGetAvatarForRemoteUser(): void {
+		$cloudId = 'user@https://remote.example.com';
+
+		$this->userManager
+			->expects($this->once())
+			->method('get')
+			->with($cloudId)
+			->willReturn(null);
+
+		$resolvedCloudId = $this->createMock(ICloudId::class);
+		$resolvedCloudId->method('getUser')->willReturn('user');
+		$resolvedCloudId->method('getRemote')->willReturn('https://remote.example.com');
+		$resolvedCloudId->method('getDisplayId')->willReturn('user@remote.example.com');
+
+		$cloudIdManager = $this->createMock(ICloudIdManager::class);
+		$cloudIdManager->expects($this->once())
+			->method('isValidCloudId')
+			->with($cloudId)
+			->willReturn(true);
+		$cloudIdManager->method('resolveCloudId')
+			->with($cloudId)
+			->willReturn($resolvedCloudId);
+		$this->overwriteService(ICloudIdManager::class, $cloudIdManager);
+
+		// the remote branch must not touch local avatar storage
+		$this->appData->expects($this->never())->method('getFolder');
+		$this->accountManager->expects($this->never())->method('getAccount');
+
+		$avatar = $this->avatarManager->getAvatar($cloudId);
+
+		self::assertInstanceOf(RemoteAvatar::class, $avatar);
+		self::assertTrue($avatar->exists());
+		self::assertTrue($avatar->isCustomAvatar());
+		self::assertSame('user@remote.example.com', $avatar->getDisplayName());
+	}
+
+	public function testGetAvatarThrowsForUnknownUserThatIsNotACloudId(): void {
+		$this->expectException(\Exception::class);
+		$this->expectExceptionMessage('user does not exist');
+
+		$this->userManager
+			->expects($this->once())
+			->method('get')
+			->with('invalidUser')
+			->willReturn(null);
+
+		$cloudIdManager = $this->createMock(ICloudIdManager::class);
+		$cloudIdManager->expects($this->once())
+			->method('isValidCloudId')
+			->with('invalidUser')
+			->willReturn(false);
+		$this->overwriteService(ICloudIdManager::class, $cloudIdManager);
+
+		$this->avatarManager->getAvatar('invalidUser');
 	}
 }
